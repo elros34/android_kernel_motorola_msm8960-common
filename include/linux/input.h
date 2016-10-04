@@ -212,7 +212,7 @@ struct input_keymap_entry {
 #define KEY_LEFTBRACE		26
 #define KEY_RIGHTBRACE		27
 #define KEY_ENTER		28
-#define KEY_LEFTCTRL		29
+#define KEY_REPLY		29
 #define KEY_A			30
 #define KEY_S			31
 #define KEY_D			32
@@ -419,7 +419,7 @@ struct input_keymap_entry {
 #define KEY_KBDILLUMUP		230
 
 #define KEY_SEND		231	/* AC Send */
-#define KEY_REPLY		232	/* AC Reply */
+#define KEY_LEFTCTRL		232
 #define KEY_FORWARDMAIL		233	/* AC Forward Msg */
 #define KEY_SAVE		234	/* AC Save */
 #define KEY_DOCUMENTS		235
