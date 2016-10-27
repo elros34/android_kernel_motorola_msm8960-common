@@ -555,4 +555,17 @@ config BOSCH_BMA150
           If you say yes here you get support for Bosch Sensortec's
           acceleration sensors SMB380/BMA150.
 
+config INPUT_PM8XXX_VIBRATOR
+	tristate "Qualcomm PM8XXX vibrator support"
+	depends on MFD_PM8XXX
+	select INPUT_FF_MEMLESS
+	help
+	  This option enables device driver support for the vibrator
+	  on Qualcomm PM8xxx chip. This driver supports ff-memless interface
+	  from input framework.
+
+	  To compile this driver as module, choose M here: the
+	  module will be called pm8xxx-vibrator.
+
+
 endif
