@@ -76,14 +76,26 @@
 
 #include <linux/ion.h>
 #include <mach/ion.h>
+#include <mach/system.h>
 
 #ifdef CONFIG_MACH_MSM8960_MMI
 #include <linux/power/mmi-battery.h>
 #include "board-mmi.h"
 #endif
 
-extern void mmi_buzz_blip(void);
-extern void mmi_sw_ap_reset(void);
+void mmi_buzz_blip(void)
+{
+
+}
+
+void mmi_sw_ap_reset(void)
+{
+    arch_reset(0, 0);
+
+    /* if reboot fails, wait for watchdog */
+    while (1)
+            ;
+}
 
 #include "timer.h"
 #include "devices.h"
