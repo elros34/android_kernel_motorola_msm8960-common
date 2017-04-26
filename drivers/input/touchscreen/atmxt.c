@@ -3717,3 +3717,5 @@ static void atmxt_remove_sysfs_files(struct atmxt_driver_data *dd)
 	device_remove_file(&(dd->client->dev), &dev_attr_ic_ver);
 	return;
 }
+
+MODULE_LICENSE("GPL v2");
