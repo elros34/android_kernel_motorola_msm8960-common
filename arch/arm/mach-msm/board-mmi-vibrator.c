@@ -73,8 +73,6 @@
 
 #define MAX_FF_MAGNITUDE        0xFF
 
-#define REGULATOR_VOLTAGE       2800000
-
 static unsigned int pwm_period_us;
 module_param(pwm_period_us, uint, 0644);
 
@@ -338,7 +336,7 @@ static int vibrator_regulator_init(void)
         vib->reg.enabled = 0;
 
         ret = regulator_set_voltage(vib->reg.regulator,
-                REGULATOR_VOLTAGE, REGULATOR_VOLTAGE);
+                vib->reg.volt[0].max_uV, vib->reg.volt[0].max_uV);
         if (ret)
                 dvib_print("\t\trv %d\n", ret);
 
