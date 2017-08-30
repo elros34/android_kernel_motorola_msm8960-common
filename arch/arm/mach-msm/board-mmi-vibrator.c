@@ -73,6 +73,9 @@
 
 #define MAX_FF_MAGNITUDE        0xFF
 
+#define VIB_MODE_FFMEMLESS      1
+#define VIB_MODE_FIXED_TIME     2
+
 static unsigned int pwm_period_us;
 module_param(pwm_period_us, uint, 0644);
 
@@ -84,6 +87,14 @@ struct vib_pwm {
         unsigned int period;
         unsigned int duty_en;
         unsigned int duty_dir;
+};
+
+struct vib_pwm vib_pwm_config[] =
+{
+        {   24999,   33000,   33000,   20000 },
+        {   32999,   40000,   40000,   25000 },
+        {   39999,   52000,   52000,   33000 },
+        {   60000,   60000,   60000,   40000 }
 };
 
 struct vib_ctrl_gpio {
@@ -153,12 +164,18 @@ struct vibrator {
         struct vib_control ctrl;
         unsigned int min_us;
         unsigned int max_us;
+        struct work_struct work;
+        int vib_mode;
+        bool active;
 };
 
 static const char *vib_name = "vibrator";
 
 static struct vibrator *vib;
 
+static unsigned short enable_us;
+static struct kernel_param_ops enable_param_ops_ushort;
+module_param_cb(enable_us, &enable_param_ops_ushort, &enable_us, S_IWUSR | S_IWGRP);
 
 static void vib_signal_print(struct vib_signal *vibs)
 {
@@ -179,26 +196,36 @@ static enum hrtimer_restart gpioc_hrtimer_func(struct hrtimer *hrtimer)
         if (gpioc->stage == GPIO_STAGE_ACTIVE) {
                 if (vibs->signal_type == SIGNAL_ENABLE) {
                     if (gpioc->inactive_us == 0) {
-                        gpio_set_value(of->gpio, of->active_level);
-                        hrtimer_start(&gpioc->hrtimer,
-                                ns_to_ktime((u64) gpioc->active_us
-                                        * NSEC_PER_USEC),
-                                HRTIMER_MODE_REL);
+                        if (vib->vib_mode == VIB_MODE_FIXED_TIME) {
+                            gpio_set_value(of->gpio, !of->active_level);
+                            gpioc->stage = GPIO_STAGE_INACTIVE;
+                            schedule_work(&vib->work);
+                        } else {
+                            gpio_set_value(of->gpio, of->active_level);
+                            hrtimer_start(&gpioc->hrtimer,
+                                    ns_to_ktime((u64) gpioc->active_us
+                                            * NSEC_PER_USEC),
+                                    HRTIMER_MODE_REL);
+                        }
                     } else {
                         gpio_set_value(of->gpio, !of->active_level);
                         gpioc->stage = GPIO_STAGE_INACTIVE;
                     }
                 }
+
                 if (gpioc->inactive_us) {
                         if (vibs->signal_type == SIGNAL_DIRECTION) {
                                 gpio_set_value(of->gpio,
                                                 !of->active_level);
                                 gpioc->stage = GPIO_STAGE_INACTIVE;
                         }
-                        hrtimer_start(&gpioc->hrtimer,
-                                ns_to_ktime((u64) gpioc->inactive_us
-                                        * NSEC_PER_USEC),
-                                HRTIMER_MODE_REL);
+
+                        if (vib->vib_mode == VIB_MODE_FFMEMLESS) {
+                            hrtimer_start(&gpioc->hrtimer,
+                                    ns_to_ktime((u64) gpioc->inactive_us
+                                            * NSEC_PER_USEC),
+                                    HRTIMER_MODE_REL);
+                        }
                 }
         } else {
                 if (gpioc->active_us) {
@@ -336,7 +363,7 @@ static int vibrator_regulator_init(void)
         vib->reg.enabled = 0;
 
         ret = regulator_set_voltage(vib->reg.regulator,
-                vib->reg.volt[0].max_uV, vib->reg.volt[0].max_uV);
+                vib->reg.volt[0].min_uV, vib->reg.volt[0].max_uV);
         if (ret)
                 dvib_print("\t\trv %d\n", ret);
 
@@ -365,6 +392,33 @@ static int vibrator_regulator_disable(void)
         return ret;
 }
 
+/* Select the shortest pwm with the time member greater or equal to request.
+ * If not available, pick up the pwm with the biggest time member.
+ */
+static struct vib_pwm *vib_select_pwm(int values_us)
+{
+        struct vib_pwm *pwm, *tmp, *l = NULL, *ge = NULL;
+        int i;
+        for (i = 0; i < MAX_PWMS; i++) {
+                tmp = &vib->ctrl.vib_pwm[i];
+                if (tmp->time) {
+                        if (tmp->time < values_us) {
+                                if (!l || l->time < tmp->time)
+                                        l = tmp;
+                        } else {
+                                if (!ge || ge->time >= tmp->time)
+                                        ge = tmp;
+                        }
+                } else {
+                        break;
+                }
+        }
+        pwm = ge ? ge : l;
+        if (pwm)
+                dvib_print("\t\ts\t%u %u %u %u\n", pwm->time,
+                        pwm->period, pwm->duty_en, pwm->duty_dir);
+        return pwm;
+}
 
 static void vibrator_dump(void)
 {
@@ -390,13 +444,14 @@ static int vibrator_init(void)
 static void vibrator_power_on(int magnitude)
 {
         struct vib_pwm pwm;
-        struct vib_of_signal *of;
+        struct vib_signal *vibs;
         unsigned long total_us = 60000;
         int ret;
         int time_range;
 
         wake_lock(&vib->wakelock);
 
+        cancel_work_sync(&vib->work);
         ret = vibrator_regulator_enable();
         if (ret) {
                 zfprintk("regulator enable %s failed\n",
@@ -413,9 +468,12 @@ static void vibrator_power_on(int magnitude)
 
         vib_signal_config(&vib->ctrl.vib_en, total_us,
                                 pwm.period, pwm.duty_en);
-        of = &vib->ctrl.vib_dir.of;
-        gpio_set_value(of->gpio, of->active_level);
+
+        vibs = &vib->ctrl.vib_dir;
+        vib_ctrl_gpio_deactivate(vibs);
+        gpio_set_value(vibs->of.gpio, vibs->of.active_level);
         vib_signal_activate(&vib->ctrl.vib_en);
+        vib->active = true;
 }
 
 static int vibrator_power_off(void)
@@ -424,13 +482,20 @@ static int vibrator_power_off(void)
         vib_signal_deactivate(&vib->ctrl.vib_dir);
         vibrator_regulator_disable();
         wake_unlock(&vib->wakelock);
+        vib->active = false;
         return 0;
+}
+
+static void vibrator_power_off_work(struct work_struct *work)
+{
+        vibrator_power_off();
 }
 
 void mmi_vibrator_enable(unsigned int magnitude)
 {
         if (magnitude > MAX_FF_MAGNITUDE)
             magnitude = MAX_FF_MAGNITUDE ;
+        vib->vib_mode = VIB_MODE_FFMEMLESS;
         vibrator_power_on(magnitude);
 }
 
@@ -453,6 +518,47 @@ void mmi_vibrator_set_magnitude(unsigned int magnitude)
 }
 
 EXPORT_SYMBOL(mmi_vibrator_set_magnitude);
+
+static int enable_param_set_ushort(const char *val, const struct kernel_param *kp)
+{
+    unsigned short *penable = kp->arg;
+    int ret = param_set_ushort(val, kp);
+    if (!ret) {
+        if (vib->active) // ffmemless in use
+            return 0;
+
+        if (*penable) {
+            struct vib_pwm *pwm;
+            unsigned long total_us;
+
+            dprintk("set param %d\n", *penable);
+            vib->vib_mode = VIB_MODE_FIXED_TIME;
+
+            wake_lock(&vib->wakelock);
+            cancel_work_sync(&vib->work);
+            ret = vibrator_regulator_enable();
+            if (ret) {
+                    zfprintk("regulator enable %s failed\n",
+                            vib->reg.name);
+                    return -ret;
+            }
+
+            pwm = vib_select_pwm(*penable);
+            total_us = pwm->period;
+
+            vib_signal_config(&vib->ctrl.vib_dir, total_us,
+                                    pwm->period, pwm->duty_dir);
+            vib_signal_config(&vib->ctrl.vib_en, total_us,
+                                    pwm->period, pwm->duty_en);
+            vib_signal_activate(&vib->ctrl.vib_dir);
+            vib_signal_activate(&vib->ctrl.vib_en);
+            vib->active = true;
+        } else {
+            vibrator_power_off();
+        }
+    }
+    return ret;
+}
 
 static int vib_signal_init(struct vib_signal *vibs)
 {
@@ -484,7 +590,9 @@ static int vib_of_init_default(struct vibrator *vib, int vib_nr)
         if (vib_signal_init(&vib->ctrl.vib_en)) {
                 zfprintk("vib_en init failed\n");
                 return -ENODEV;
-                }
+        }
+
+        memcpy(vib->ctrl.vib_pwm,vib_pwm_config,sizeof(vib_pwm_config));
 
         vib->ctrl.vib_dir.name = VIB_DIR;
         vib->ctrl.vib_dir.signal_type = SIGNAL_DIRECTION;
@@ -543,6 +651,8 @@ static int vib_of_init(struct vibrator *vib, int vib_nr)
                 zfprintk("vib_en not found in %s\n", dt_path_vib);
                 return -ENODEV;
         }
+
+        memcpy(vib->ctrl.vib_pwm,vib_pwm_config,sizeof(vib_pwm_config));
 
         prop = of_get_property(node, VIB_DIR, &len);
         if (prop && len) {
@@ -604,7 +714,6 @@ static int vib_of_init(struct vibrator *vib, int vib_nr)
         return 0;
 }
 
-
 void __init mmi_vibrator_init(void)
 {
         vib = kzalloc(sizeof(*vib), GFP_KERNEL);
@@ -619,13 +728,17 @@ void __init mmi_vibrator_init(void)
                         return;
         }
 
+        vib->active = false;
         wake_lock_init(&vib->wakelock, WAKE_LOCK_SUSPEND, vib_name);
         dprintk("type 0x%x\n", vib->type);
 
         vibrator_init();
         vibrator_dump();
         pwm_period_us = 10000; // 10ms
-        pwm_duty_min_us = 2100;
+        pwm_duty_min_us = 2100; // 2.1ms
+
+        INIT_WORK(&vib->work, vibrator_power_off_work);
+        enable_param_ops_ushort.set = enable_param_set_ushort;
 
         return;
 }

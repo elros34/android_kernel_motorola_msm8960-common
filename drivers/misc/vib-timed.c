@@ -41,7 +41,7 @@ struct vib_timed_data {
 	int id;
 };
 
-int vib_timed_debug = 1;
+int vib_timed_debug = 0;
 
 static struct vib_timed *vibs;
 static int vib_count;
