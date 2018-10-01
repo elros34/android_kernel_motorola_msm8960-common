@@ -519,6 +519,38 @@ void mmi_vibrator_set_magnitude(unsigned int magnitude)
 
 EXPORT_SYMBOL(mmi_vibrator_set_magnitude);
 
+static int vibrator_fixed_power_on(int us)
+{
+    int ret = 0;
+    struct vib_pwm *pwm;
+    unsigned long total_us;
+
+    dprintk("vibra set power on %d\n", us);
+    vib->vib_mode = VIB_MODE_FIXED_TIME;
+
+    wake_lock(&vib->wakelock);
+    cancel_work_sync(&vib->work);
+    ret = vibrator_regulator_enable();
+    if (ret) {
+            zfprintk("regulator enable %s failed\n",
+                    vib->reg.name);
+            return -ret;
+    }
+
+    pwm = vib_select_pwm(us);
+    total_us = pwm->period;
+
+    vib_signal_config(&vib->ctrl.vib_dir, total_us,
+                            pwm->period, pwm->duty_dir);
+    vib_signal_config(&vib->ctrl.vib_en, total_us,
+                            pwm->period, pwm->duty_en);
+    vib_signal_activate(&vib->ctrl.vib_dir);
+    vib_signal_activate(&vib->ctrl.vib_en);
+    vib->active = true;
+
+    return ret;
+}
+
 static int enable_param_set_ushort(const char *val, const struct kernel_param *kp)
 {
     unsigned short *penable = kp->arg;
@@ -528,31 +560,7 @@ static int enable_param_set_ushort(const char *val, const struct kernel_param *k
             return 0;
 
         if (*penable) {
-            struct vib_pwm *pwm;
-            unsigned long total_us;
-
-            dprintk("set param %d\n", *penable);
-            vib->vib_mode = VIB_MODE_FIXED_TIME;
-
-            wake_lock(&vib->wakelock);
-            cancel_work_sync(&vib->work);
-            ret = vibrator_regulator_enable();
-            if (ret) {
-                    zfprintk("regulator enable %s failed\n",
-                            vib->reg.name);
-                    return -ret;
-            }
-
-            pwm = vib_select_pwm(*penable);
-            total_us = pwm->period;
-
-            vib_signal_config(&vib->ctrl.vib_dir, total_us,
-                                    pwm->period, pwm->duty_dir);
-            vib_signal_config(&vib->ctrl.vib_en, total_us,
-                                    pwm->period, pwm->duty_en);
-            vib_signal_activate(&vib->ctrl.vib_dir);
-            vib_signal_activate(&vib->ctrl.vib_en);
-            vib->active = true;
+            ret = vibrator_fixed_power_on(*penable);
         } else {
             vibrator_power_off();
         }
@@ -712,6 +720,26 @@ static int vib_of_init(struct vibrator *vib, int vib_nr)
 
         of_node_put(node);
         return 0;
+}
+
+void mmi_buzz_blip(void)
+{
+    int number_of_blips = 10;
+
+    /* generate a pulse train to blip buzz 10 times or
+       until the power key is released */
+    while (number_of_blips--) {
+        vibrator_fixed_power_on(100000);
+    }
+}
+
+void mmi_sw_ap_reset(void)
+{
+    arch_reset(0, 0);
+
+    /* if reboot fails, wait for watchdog */
+    while (1)
+        ;
 }
 
 void __init mmi_vibrator_init(void)
