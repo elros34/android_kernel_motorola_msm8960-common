@@ -299,18 +299,27 @@ void handle_switch_index(int index)
 	}
 }
 
-static void android_enable(struct android_dev *dev)
+static int android_enable(struct android_dev *dev)
 {
 	struct usb_composite_dev *cdev = dev->cdev;
+    int err = 0;
 
 	BUG_ON(!mutex_is_locked(&dev->mutex));
-	BUG_ON(!dev->disable_depth);
+
+    if (WARN_ON(!dev->disable_depth))
+        return -1;
 
 	if (--dev->disable_depth == 0) {
-		usb_add_config(cdev, &android_config_driver,
+		err = usb_add_config(cdev, &android_config_driver,
 					android_bind_config);
+        if (err < 0) {
+            pr_err("%s: usb_add_config failed : err: %d\n",
+                   __func__, err);
+            return err;
+        }
 		usb_gadget_connect(cdev->gadget);
 	}
+    return err;
 }
 
 static void android_disable(struct android_dev *dev)
@@ -1722,7 +1731,18 @@ android_bind_enabled_functions(struct android_dev *dev,
 	list_for_each_entry(f, &dev->enabled_functions, enabled_list) {
 		ret = f->bind_config(f, c);
 		if (ret) {
-			pr_err("%s: %s failed", __func__, f->name);
+            pr_err("%s: %s failed\n", __func__, f->name);
+            while (!list_empty(&c->functions)) {
+                struct usb_function		*f;
+
+                f = list_first_entry(&c->functions,
+                    struct usb_function, list);
+                list_del(&f->list);
+                if (f->unbind)
+                    f->unbind(c, f);
+            }
+            if (c->unbind)
+                c->unbind(c);
 			return ret;
 		}
 	}
@@ -1888,6 +1908,7 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 	struct usb_composite_dev *cdev = dev->cdev;
 	struct android_usb_function *f;
 	int enabled = 0;
+    int err = 0;
 
 	mutex_lock(&dev->mutex);
 
@@ -1904,7 +1925,14 @@ static ssize_t enable_store(struct device *pdev, struct device_attribute *attr,
 			if (f->enable)
 				f->enable(f);
 		}
-		android_enable(dev);
+        err = android_enable(dev);
+        if (err < 0) {
+            pr_err("%s: android_enable failed\n", __func__);
+            dev->connected = 0;
+            dev->enabled = false;
+            mutex_unlock(&dev->mutex);
+            return size;
+        }
 		dev->enabled = true;
 	} else if (!enabled && dev->enabled) {
 		ms_cdrom_enable = 0;
