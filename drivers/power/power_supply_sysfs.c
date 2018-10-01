@@ -44,7 +44,7 @@ static ssize_t power_supply_show_property(struct device *dev,
 					  struct device_attribute *attr,
 					  char *buf) {
 	static char *type_text[] = {
-		"Battery", "UPS", "Mains", "USB",
+        "Unknown", "Battery", "UPS", "Mains", "USB",
 		"USB_DCP", "USB_CDP", "USB_ACA"
 	};
 	static char *status_text[] = {
@@ -69,8 +69,13 @@ static ssize_t power_supply_show_property(struct device *dev,
 	const ptrdiff_t off = attr - power_supply_attrs;
 	union power_supply_propval value;
 
-	if (off == POWER_SUPPLY_PROP_TYPE)
-		value.intval = psy->type;
+    if (off == POWER_SUPPLY_PROP_TYPE) {
+        int type = psy->type;
+        if (type == POWER_SUPPLY_TYPE_USB)
+            ret = psy->get_property(psy, off, &value);
+        else
+            value.intval = psy->type;
+    }
 	else
 		ret = psy->get_property(psy, off, &value);
 

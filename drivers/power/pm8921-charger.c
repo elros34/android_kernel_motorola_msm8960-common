@@ -1270,9 +1270,15 @@ static void bms_notify_check(struct pm8921_chg_chip *chip)
 	}
 }
 
-static enum power_supply_property pm_power_props[] = {
+static enum power_supply_property pm_usb_power_props[] = {
 	POWER_SUPPLY_PROP_PRESENT,
-	POWER_SUPPLY_PROP_ONLINE,
+    POWER_SUPPLY_PROP_ONLINE,
+    POWER_SUPPLY_PROP_TYPE,
+};
+
+static enum power_supply_property pm_ac_power_props[] = {
+    POWER_SUPPLY_PROP_PRESENT,
+    POWER_SUPPLY_PROP_ONLINE,
 };
 
 static char *pm_power_supplied_to[] = {
@@ -1285,6 +1291,7 @@ static int pm_power_get_property(struct power_supply *psy,
 				  union power_supply_propval *val)
 {
 	int current_max;
+    int usb_plugged;
 
 	/* Check if called before init */
 	if (!the_chip)
@@ -1296,7 +1303,7 @@ static int pm_power_get_property(struct power_supply *psy,
 		val->intval = current_max;
 		break;
 	case POWER_SUPPLY_PROP_PRESENT:
-	case POWER_SUPPLY_PROP_ONLINE:
+    case POWER_SUPPLY_PROP_ONLINE:
 		val->intval = 0;
 		if (charging_disabled)
 			return 0;
@@ -1349,6 +1356,26 @@ static int pm_power_get_property(struct power_supply *psy,
 
 		pr_err("Unkown POWER_SUPPLY_TYPE %d\n", psy->type);
 		break;
+
+    case POWER_SUPPLY_PROP_TYPE:
+        if (psy->type == POWER_SUPPLY_TYPE_USB) {
+            val->intval = 0;
+            usb_plugged = is_usb_chg_plugged_in(the_chip);
+            if (usb_plugged) {
+                if ((the_chip->emu_accessory == EMU_ACCY_USB) ||
+                    (the_chip->emu_accessory == EMU_ACCY_FACTORY)) {
+                    val->intval = POWER_SUPPLY_TYPE_USB;
+                } else if (((the_chip->emu_accessory == EMU_ACCY_CHARGER) ||
+                           (the_chip->emu_accessory == EMU_ACCY_WHISPER_SMART_DOCK)) &&
+                           (alarm_state != PM_BATT_ALARM_SHUTDOWN)) {
+                    val->intval = POWER_SUPPLY_TYPE_USB_DCP;
+                }
+            } else if (!usb_plugged &&
+                       (the_chip->emu_accessory == EMU_ACCY_NONE)) {
+                val->intval = POWER_SUPPLY_TYPE_UNKNOWN;
+            }
+        }
+        break;
 	default:
 		return -EINVAL;
 	}
@@ -4911,8 +4938,8 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 	chip->usb_psy.type = POWER_SUPPLY_TYPE_USB,
 	chip->usb_psy.supplied_to = pm_power_supplied_to,
 	chip->usb_psy.num_supplicants = ARRAY_SIZE(pm_power_supplied_to),
-	chip->usb_psy.properties = pm_power_props,
-	chip->usb_psy.num_properties = ARRAY_SIZE(pm_power_props),
+    chip->usb_psy.properties = pm_usb_power_props,
+    chip->usb_psy.num_properties = ARRAY_SIZE(pm_usb_power_props),
 	chip->usb_psy.get_property = pm_power_get_property,
 
 #ifdef CONFIG_EMU_DETECTION
@@ -4923,8 +4950,8 @@ static int __devinit pm8921_charger_probe(struct platform_device *pdev)
 	chip->dc_psy.type = POWER_SUPPLY_TYPE_MAINS,
 	chip->dc_psy.supplied_to = pm_power_supplied_to,
 	chip->dc_psy.num_supplicants = ARRAY_SIZE(pm_power_supplied_to),
-	chip->dc_psy.properties = pm_power_props,
-	chip->dc_psy.num_properties = ARRAY_SIZE(pm_power_props),
+    chip->dc_psy.properties = pm_ac_power_props,
+    chip->dc_psy.num_properties = ARRAY_SIZE(pm_ac_power_props),
 	chip->dc_psy.get_property = pm_power_get_property,
 
 	chip->batt_psy.name = "battery",
