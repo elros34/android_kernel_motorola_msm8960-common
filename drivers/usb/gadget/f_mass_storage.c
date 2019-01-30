@@ -320,6 +320,7 @@ void handle_switch_index(int index);
 #define SWITCH_INDEX_RESET     0x41
 
 int ms_cdrom_enable;
+static int enabled_nluns = 1;
 
 #ifdef CONFIG_USB_CSW_HACK
 static int write_error_after_csw_sent;
@@ -663,7 +664,7 @@ static int fsg_setup(struct usb_function *f,
 
 		if (fsg->common->cdrom_lun_num > 0) {
 			if (ms_cdrom_enable)
-				*(u8 *)req->buf = fsg->common->nluns - 1;
+				*(u8 *)req->buf = enabled_nluns - 1;
 			else
 				*(u8 *)req->buf =
 					fsg->common->cdrom_lun_num - 1;
@@ -671,7 +672,7 @@ static int fsg_setup(struct usb_function *f,
 			if (ms_cdrom_enable)
 				*(u8 *)req->buf = 0;
 			else
-				*(u8 *)req->buf = fsg->common->nluns - 1;
+				*(u8 *)req->buf = enabled_nluns - 1;
 		}
 
 		/* Respond with data/status */

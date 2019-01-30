@@ -1113,7 +1113,7 @@ static int mass_storage_function_init(struct android_usb_function *f,
 {
 	struct mass_storage_function_config *config;
 	struct fsg_common *common;
-	int err;
+	int err, i;
 
 	config = kzalloc(sizeof(struct mass_storage_function_config),
 								GFP_KERNEL);
@@ -1121,8 +1121,15 @@ static int mass_storage_function_init(struct android_usb_function *f,
 		return -ENOMEM;
 
 	config->fsg.cdrom_lun_num = 0;
-	config->fsg.nluns = 1;
-	config->fsg.luns[0].removable = 1;
+    config->fsg.nluns = FSG_MAX_LUNS;
+
+    for (i = 0; i < config->fsg.nluns; i++) {
+        config->fsg.luns[i].removable = 1;
+        config->fsg.luns[i].ro = 0;
+        config->fsg.luns[i].cdrom = 0;
+        config->fsg.luns[i].nofua = 1;
+    }
+
 	/* defaults that should be overriden by user space */
 	strncpy(ms_vendor, "Android", sizeof(ms_vendor));
 	strncpy(ms_product, "Android", sizeof(ms_product));
@@ -1135,14 +1142,28 @@ static int mass_storage_function_init(struct android_usb_function *f,
 		return PTR_ERR(common);
 	}
 
-	err = sysfs_create_link(&f->dev->kobj,
-				&common->luns[0].dev.kobj,
-				"lun");
-	if (err) {
-		fsg_common_release(&common->ref);
-		kfree(config);
-		return err;
-	}
+    for (i = 0; i < config->fsg.nluns; i++) {
+        char name[32];
+
+        memset(name, 0, 32);
+
+        if (i) {
+            snprintf(name, 5, "lun%d\n", i);
+        } else {
+            strcpy(name, "lun");
+        }
+
+        pr_debug("lun name: %s\n", name);
+
+        err = sysfs_create_link(&f->dev->kobj,
+                    &common->luns[i].dev.kobj,
+                    name);
+        if (err) {
+            fsg_common_release(&common->ref);
+            kfree(config);
+            return err;
+        }
+    }
 
 	config->common = common;
 	f->config = config;
@@ -1185,6 +1206,31 @@ static ssize_t mass_storage_inquiry_store(struct device *dev,
 static DEVICE_ATTR(inquiry_string, S_IRUGO | S_IWUSR,
 					mass_storage_inquiry_show,
 					mass_storage_inquiry_store);
+
+static ssize_t mass_storage_nluns_show(struct device *dev,
+        struct device_attribute *attr, char *buf)
+{
+    return snprintf(buf, PAGE_SIZE, "%d\n", enabled_nluns);
+}
+
+static ssize_t mass_storage_nluns_store(struct device *dev,
+        struct device_attribute *attr, const char *buf, size_t size)
+{
+    uint value;
+
+    if (sscanf(buf, "%u", &value) == 1) {
+        if (value > FSG_MAX_LUNS)
+            return -EINVAL;
+        pr_info("android_usb: nluns =  %u\n", value);
+        enabled_nluns = value;
+        return size;
+    }
+
+    return -EINVAL;
+}
+
+static DEVICE_ATTR(nluns, S_IRUGO | S_IWUSR, mass_storage_nluns_show,
+                                             mass_storage_nluns_store);
 
 static ssize_t mass_storage_vendor_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
@@ -1248,6 +1294,7 @@ static struct device_attribute *mass_storage_function_attributes[] = {
 	&dev_attr_vendor,
 	&dev_attr_product,
 	&dev_attr_cdrom,
+    &dev_attr_nluns,
 	NULL
 };
 
