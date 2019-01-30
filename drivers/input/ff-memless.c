@@ -42,7 +42,7 @@ MODULE_DESCRIPTION("Force feedback support for memoryless devices");
 #define FF_MEMLESS_EFFECTS	64
 
 /* Envelope update interval in ms */
-#define FF_ENVELOPE_INTERVAL	50
+#define FF_ENVELOPE_INTERVAL	10
 
 #define FF_EFFECT_STARTED	0
 #define FF_EFFECT_PLAYING	1
