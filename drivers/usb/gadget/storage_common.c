@@ -227,7 +227,11 @@ struct interrupt_data {
 
 
 /*-------------------------------------------------------------------------*/
-
+/*
+ * Vendor (8 chars), product (16 chars), release (4 hexadecimal digits) and NUL
+ * byte
+ */
+#define INQUIRY_STRING_LEN ((size_t) (8 + 16 + 4 + 1))
 
 struct fsg_lun {
 	struct file	*filp;
@@ -248,6 +252,7 @@ struct fsg_lun {
 	u32		unit_attention_data;
 
 	struct device	dev;
+    char    inquiry_string[INQUIRY_STRING_LEN];
 #ifdef CONFIG_USB_MSC_PROFILING
 	spinlock_t	lock;
 	struct {
@@ -757,6 +762,13 @@ static ssize_t fsg_show_file(struct device *dev, struct device_attribute *attr,
 	return rc;
 }
 
+static ssize_t fsg_show_inquiry_string(struct device *dev, struct device_attribute *attr,
+                  char *buf)
+{
+    struct fsg_lun	*curlun = fsg_lun_from_dev(dev);
+
+    return sprintf(buf, "%s\n", curlun->inquiry_string);
+}
 
 static ssize_t fsg_store_ro(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
@@ -847,4 +859,23 @@ static ssize_t fsg_store_file(struct device *dev, struct device_attribute *attr,
 	}
 	up_write(filesem);
 	return (rc < 0 ? rc : count);
+}
+
+static ssize_t fsg_store_inquiry_string(struct device *dev,
+                   struct device_attribute *attr,
+                   const char *buf, size_t count)
+{
+    struct fsg_lun	*curlun = fsg_lun_from_dev(dev);
+    const size_t len = min(count, sizeof(curlun->inquiry_string));
+
+    if (len == 0 || buf[0] == '\n') {
+        curlun->inquiry_string[0] = 0;
+    } else {
+        snprintf(curlun->inquiry_string,
+             sizeof(curlun->inquiry_string), "%-28s", buf);
+        if (curlun->inquiry_string[len-1] == '\n')
+            curlun->inquiry_string[len-1] = ' ';
+    }
+
+    return count;
 }

@@ -413,11 +413,7 @@ struct fsg_common {
 	/* Gadget's private data. */
 	void			*private_data;
 
-	/*
-	 * Vendor (8 chars), product (16 chars), release (4
-	 * hexadecimal digits) and NUL byte
-	 */
-	char inquiry_string[8 + 16 + 4 + 1];
+	char inquiry_string[INQUIRY_STRING_LEN];
 
 	struct kref		ref;
 	unsigned int            cdrom_lun_num;
@@ -432,6 +428,7 @@ struct fsg_config {
 		char removable;
 		char cdrom;
 		char nofua;
+        char inquiry_string[INQUIRY_STRING_LEN];
 	} luns[FSG_MAX_LUNS];
 
 	const char		*lun_name_format;
@@ -1313,7 +1310,12 @@ static int do_inquiry(struct fsg_common *common, struct fsg_buffhd *bh)
 	buf[5] = 0;		/* No special options */
 	buf[6] = 0;
 	buf[7] = 0;
-	memcpy(buf + 8, common->inquiry_string, sizeof common->inquiry_string);
+    if (curlun->inquiry_string[0])
+        memcpy(buf + 8, curlun->inquiry_string,
+               sizeof(curlun->inquiry_string));
+    else
+        memcpy(buf + 8, common->inquiry_string,
+               sizeof(common->inquiry_string));
 	return 36;
 }
 
@@ -2937,6 +2939,8 @@ static int fsg_main_thread(void *common_)
 static DEVICE_ATTR(ro, 0644, fsg_show_ro, fsg_store_ro);
 static DEVICE_ATTR(nofua, 0644, fsg_show_nofua, fsg_store_nofua);
 static DEVICE_ATTR(file, 0644, fsg_show_file, fsg_store_file);
+static struct device_attribute dev_attr_lun_inquiry_string =
+        __ATTR(inquiry_string, 0644, fsg_show_inquiry_string, fsg_store_inquiry_string);
 #ifdef CONFIG_USB_MSC_PROFILING
 static DEVICE_ATTR(perf, 0644, fsg_show_perf, fsg_store_perf);
 #endif
@@ -3053,6 +3057,9 @@ static struct fsg_common *fsg_common_init(struct fsg_common *common,
 		rc = device_create_file(&curlun->dev, &dev_attr_nofua);
 		if (rc)
 			goto error_luns;
+        rc = device_create_file(&curlun->dev, &dev_attr_lun_inquiry_string);
+        if (rc)
+            goto error_luns;
 #ifdef CONFIG_USB_MSC_PROFILING
 		rc = device_create_file(&curlun->dev, &dev_attr_perf);
 		if (rc)
@@ -3193,6 +3200,7 @@ static void fsg_common_release(struct kref *ref)
 			device_remove_file(&lun->dev, &dev_attr_nofua);
 			device_remove_file(&lun->dev, &dev_attr_ro);
 			device_remove_file(&lun->dev, &dev_attr_file);
+            device_remove_file(&lun->dev, &dev_attr_lun_inquiry_string);
 			fsg_lun_close(lun);
 			device_unregister(&lun->dev);
 		}
