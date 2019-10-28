@@ -115,7 +115,7 @@
 #define CT405_PDATA_MAX			0x03FF
 #define CT406_PDATA_MAX			0x07FF
 
-#define CT406_PROXIMITY_NEAR		30	/* 30 mm */
+#define CT406_PROXIMITY_NEAR	   0    /* 0 meter */
 #define CT406_PROXIMITY_FAR		1000	/* 1 meter */
 
 #define CT406_ALS_LOW_TO_HIGH_THRESHOLD	200	/* 200 lux */
