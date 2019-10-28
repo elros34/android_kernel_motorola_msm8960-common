@@ -56,6 +56,9 @@ static const unsigned int mmi_keymap[] = {
 	KEY(0, 2, KEY_VOLUMEDOWN),
 	KEY(0, 3, 0),
 	KEY(0, 4, KEY_VOLUMEUP),
+    // fake hw keys
+    KEY(99, 8, KEY_PREVIOUSSONG),
+    KEY(99, 9, KEY_NEXTSONG),
 };
 
 static struct matrix_keymap_data mmi_keymap_data = {
@@ -109,11 +112,11 @@ static const unsigned int mmi_qwerty_keymap[] = {
 	KEY(3, 0, 0),
 	KEY(3, 1, 0),
 	KEY(3, 2, KEY_3),
-        KEY(3, 3, KEY_RIGHT),
-        KEY(3, 4, KEY_LEFT),
-        KEY(3, 5, KEY_DOWN),
-        KEY(3, 6, KEY_UP),
-        KEY(3, 7, KEY_LEFTCTRL),
+    KEY(3, 3, KEY_RIGHT),
+    KEY(3, 4, KEY_LEFT),
+    KEY(3, 5, KEY_DOWN),
+    KEY(3, 6, KEY_UP),
+    KEY(3, 7, KEY_LEFTCTRL),
 
 	KEY(4, 0, KEY_5),
 	KEY(4, 1, KEY_J),
@@ -151,6 +154,10 @@ static const unsigned int mmi_qwerty_keymap[] = {
 	KEY(7, 6, KEY_U),
 	KEY(7, 7, KEY_W),
 
+    KEY(99, 7, KEY_VOLUMEDOWN),
+    // fake hw keys
+    KEY(99, 8, KEY_PREVIOUSSONG),
+    KEY(99, 9, KEY_NEXTSONG),
 };
 
 static struct matrix_keymap_data mmi_qwerty_keymap_data = {
@@ -250,7 +257,8 @@ static bool keypad_lock_filter(struct input_handle *handle, unsigned int type,
 	if ((type == EV_KEY) && lid_state) {
 		if ((code != KEY_VOLUMEUP) && (code != KEY_VOLUMEDOWN) &&
 		    (code != KEY_CAMERA) && (code != KEY_CAMERA_SNAPSHOT) &&
-		    (code != KEY_POWER) && (code != BTN_MISC)) {
+		    (code != KEY_POWER) && (code != BTN_MISC) &&
+            (code != KEY_PREVIOUSSONG) && (code != KEY_NEXTSONG)) {
 			filtered = 1;
 			return true;
 		}

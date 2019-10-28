@@ -10,6 +10,7 @@
  * GNU General Public License for more details.
  */
 
+
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/kernel.h>
@@ -19,6 +20,7 @@
 #include <linux/bitops.h>
 #include <linux/delay.h>
 #include <linux/mutex.h>
+#include <linux/hrtimer.h>
 
 #include <linux/mfd/pm8xxx/core.h>
 #include <linux/mfd/pm8xxx/gpio.h>
@@ -88,6 +90,8 @@ static unsigned long extra_debounce_timeout = 0;
 static int last_released = -1;
 static int release_to_ignore = -1;
 
+static int pending_keycode = -1;
+static struct pmic8xxx_kp *_pmic8xxx_kp = NULL;
 /**
  * struct pmic8xxx_kp - internal keypad data structure
  * @pdata - keypad platform data pointer
@@ -113,6 +117,8 @@ struct pmic8xxx_kp {
 	u16 stuckstate[PM8XXX_MAX_ROWS];
 
 	u8 ctrl_reg;
+
+    struct hrtimer pending_key_timer;
 };
 
 static int pmic8xxx_kp_write_u8(struct pmic8xxx_kp *kp,
@@ -265,6 +271,106 @@ static int pmic8xxx_kp_read_matrix(struct pmic8xxx_kp *kp, u16 *new_state,
 	return rc;
 }
 
+static int media_keys_enabled_param_set(const char *val, struct kernel_param *kernel_param)
+{
+    int ret;
+    ushort *penable = kernel_param->arg;
+
+    if (_pmic8xxx_kp == NULL)
+        return -ENODEV;
+
+    ret = param_set_ushort(val, kernel_param);
+
+    if (!ret) {
+        if (!*penable) {
+            hrtimer_cancel(&_pmic8xxx_kp->pending_key_timer);
+            pending_keycode = -1;
+        }
+    }
+    return ret;
+}
+
+static ushort media_keys_enabled = 1;
+module_param_call(media_keys_enabled,
+                  media_keys_enabled_param_set,
+                  param_get_ushort,
+                  &media_keys_enabled,
+                  S_IRUGO | S_IWUSR | S_IWGRP);
+
+void pmic8xxx_volume_key_changed(int keycode, bool pressed)
+{
+    struct pmic8xxx_kp *kp = _pmic8xxx_kp;
+    if (kp == NULL)
+        return;
+
+    dev_dbg(kp->dev, "%s %s\n",
+            (keycode == KEY_VOLUMEUP) ? "KEY_VOLUMEUP" : "KEY_VOLUMEDOWN",
+            pressed ? "pressed" : "released");
+
+    if (!media_keys_enabled) {
+        input_report_key(kp->input, keycode, pressed);
+        input_sync(kp->input);
+        return;
+    }
+
+    if (pressed) { // key pressed
+        if (pending_keycode > 0) { // 2 volume keys pressed, screenshot mode
+            hrtimer_cancel(&kp->pending_key_timer);
+            dev_dbg(kp->dev, "2 volume keys pressed before timeout\n");
+            input_report_key(kp->input, KEY_VOLUMEUP, 1);
+            input_report_key(kp->input, KEY_VOLUMEDOWN, 1);
+            input_sync(kp->input);
+            pending_keycode = -2;
+        } else { // pending NEXT/PREVIOUS SONG
+            pending_keycode = keycode;
+            hrtimer_start(&kp->pending_key_timer, ktime_set(1, 0),
+                          HRTIMER_MODE_REL);
+        }
+    } else { // key released
+        // Report volume key press and release on physical release
+        if (pending_keycode == keycode) {
+            hrtimer_cancel(&kp->pending_key_timer);
+            input_report_key(kp->input, keycode, 1);
+            input_report_key(kp->input, keycode, 0);
+            input_sync(kp->input);
+            pending_keycode = -1;
+        } else if (pending_keycode == -2) {
+            dev_dbg(kp->dev, "one of volume keys released after screenshot mode \n");
+            input_report_key(kp->input, KEY_VOLUMEUP, 0);
+            input_report_key(kp->input, KEY_VOLUMEDOWN, 0);
+            input_sync(kp->input);
+        } else {
+            dev_dbg(kp->dev, "KEY_VOLUME released after timeout\n");
+        }
+    }
+}
+
+EXPORT_SYMBOL(pmic8xxx_volume_key_changed);
+
+static enum hrtimer_restart pending_key_timer_callback(struct hrtimer *hrtimer)
+{
+    struct pmic8xxx_kp *kp = container_of(hrtimer, struct pmic8xxx_kp,
+                                          pending_key_timer);
+
+    dev_dbg(kp->dev, "hrtimer timout: %d\n", pending_keycode);
+
+    if (pending_keycode > 0) {
+        dev_dbg(kp->dev, "hrtimer: report KEY_NEXT/PREV\n");
+        if (pending_keycode == KEY_VOLUMEUP) {
+            input_report_key(kp->input, KEY_NEXTSONG, 1);
+            input_report_key(kp->input, KEY_NEXTSONG, 0);
+            input_sync(kp->input);
+        } else {
+            input_report_key(kp->input, KEY_PREVIOUSSONG, 1);
+            input_report_key(kp->input, KEY_PREVIOUSSONG, 0);
+            input_sync(kp->input);
+        }
+        pending_keycode = -1;
+    }
+
+    return HRTIMER_NORESTART;
+}
+
 static void __pmic8xxx_kp_scan_matrix(struct pmic8xxx_kp *kp, u16 *new_state,
 					 u16 *old_state)
 {
@@ -277,39 +383,45 @@ static void __pmic8xxx_kp_scan_matrix(struct pmic8xxx_kp *kp, u16 *new_state,
 			continue;
 
 		for (col = 0; col < kp->pdata->num_cols; col++) {
+            bool key_pressed = !(new_state[row] & (1 << col));
+            unsigned int keycode;
 			if (!(bits_changed & (1 << col)))
 				continue;
 
-			dev_dbg(kp->dev, "key [%d:%d] %s\n", row, col,
-					!(new_state[row] & (1 << col)) ?
-					"pressed" : "released");
-
 			code = MATRIX_SCAN_CODE(row, col, PM8XXX_ROW_SHIFT);
+            keycode = kp->keycodes[code];
 
-                        if (!(new_state[row] & (1 << col))) {	// key pressed
-                                if (code == last_released &&
-                                                time_before(jiffies, extra_debounce_timeout)) {
-                                        dev_dbg(kp->dev, "extra debounce: press ignored");
-                                        release_to_ignore = code;
-                                        continue;
-                                }
-                        } else {				// key released
-                                if (code == release_to_ignore) {
-                                        dev_dbg(kp->dev, "extra debounce: release ignored");
-                                        release_to_ignore = -1;
-                                        continue;
-                                }
-                                extra_debounce_timeout = jiffies +
-                                                msecs_to_jiffies(EXTRA_DEBOUNCE_TIME_MS);
-                                last_released = code;
-                        }
+            dev_dbg(kp->dev, "key [%d:%d] = %d %s\n", row, col,
+                    keycode,
+					key_pressed ? "pressed" : "released");
 
-			input_event(kp->input, EV_MSC, MSC_SCAN, code);
-			input_report_key(kp->input,
-					kp->keycodes[code],
-					!(new_state[row] & (1 << col)));
+            if (keycode == KEY_VOLUMEUP || keycode == KEY_VOLUMEDOWN) {
+                pmic8xxx_volume_key_changed(keycode, key_pressed);
+                continue;
+            }
 
-			input_sync(kp->input);
+            if (key_pressed) { // key pressed
+                if (code == last_released &&
+                        time_before(jiffies, extra_debounce_timeout)) {
+                    dev_dbg(kp->dev, "extra debounce: press ignored\n");
+                    release_to_ignore = code;
+                    continue;
+                }
+            } else { // key released
+                if (code == release_to_ignore) {
+                    dev_dbg(kp->dev, "extra debounce: release ignored\n");
+                    release_to_ignore = -1;
+                    continue;
+                }
+
+                extra_debounce_timeout = jiffies +
+                        msecs_to_jiffies(EXTRA_DEBOUNCE_TIME_MS);
+                last_released = code;
+            }
+
+            input_event(kp->input, EV_MSC, MSC_SCAN, code);
+            input_report_key(kp->input, keycode, key_pressed);
+            input_sync(kp->input);
 		}
 	}
 }
@@ -476,6 +588,9 @@ static int __devinit pmic8xxx_kpd_init(struct pmic8xxx_kp *kp)
 	if (rc)
 		dev_err(kp->dev, "Error writing KEYP_SCAN reg, rc=%d\n", rc);
 
+    hrtimer_init(&kp->pending_key_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+    kp->pending_key_timer.function = pending_key_timer_callback;
+
 	return rc;
 
 }
@@ -627,6 +742,7 @@ static int __devinit pmic8xxx_kp_probe(struct platform_device *pdev)
 
 	kp->pdata	= pdata;
 	kp->dev		= &pdev->dev;
+    _pmic8xxx_kp = kp;
 
 	kp->input = input_allocate_device();
 	if (!kp->input) {
@@ -749,6 +865,7 @@ static int __devexit pmic8xxx_kp_remove(struct platform_device *pdev)
 {
 	struct pmic8xxx_kp *kp = platform_get_drvdata(pdev);
 
+    hrtimer_cancel(&kp->pending_key_timer);
 	device_init_wakeup(&pdev->dev, 0);
 	free_irq(kp->key_stuck_irq, kp);
 	free_irq(kp->key_sense_irq, kp);

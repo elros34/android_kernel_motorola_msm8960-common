@@ -8,6 +8,7 @@
  * published by the Free Software Foundation.
  */
 
+
 #include <linux/module.h>
 
 #include <linux/init.h>
@@ -43,6 +44,8 @@ struct gpio_keys_drvdata {
 	void (*disable)(struct device *dev);
 	struct gpio_button_data data[0];
 };
+
+extern void pmic8xxx_volume_key_changed(int keycode, bool pressed);
 
 /*
  * SYSFS interface for enabling/disabling keys and switches:
@@ -328,6 +331,10 @@ static void gpio_keys_report_event(struct gpio_button_data *bdata)
 		if (state)
 			input_event(input, type, button->code, button->value);
 	} else {
+        if (button->code == KEY_VOLUMEDOWN) {
+            pmic8xxx_volume_key_changed(button->code, !!state);
+            return;
+        }
 		input_event(input, type, button->code, !!state);
 	}
 	input_sync(input);
