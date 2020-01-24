@@ -1252,7 +1252,10 @@ void ConfigSearchWindow::search(void)
 	list->list->clear();
 	info->clear();
 
-	result = sym_re_search(editField->text().latin1());
+	QString str = editField->text();
+	if (str.startsWith("CONFIG_", Qt::CaseInsensitive))
+		str = str.right(str.length() - 7);
+	result = sym_re_search(str.latin1());
 	if (!result)
 		return;
 	for (p = result; *p; p++) {
